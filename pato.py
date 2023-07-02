@@ -16,12 +16,16 @@ from concurrent.futures import TimeoutError
 from datetime import datetime as dt
 
 
-def execute(call):
+def execute(call, timeout):
 
-    time = dt.now()
-    output = subprocess.run(call, capture_output = True, env = os.environ)
+    try:
+        time = dt.now()
 
-    return dt.now() - time, output.stdout.decode("utf-8"), output.stderr.decode("utf-8")
+        output = subprocess.run(call, capture_output = True, env = os.environ, timeout = timeout)
+
+        return dt.now() - time, output.stdout.decode("utf-8"), output.stderr.decode("utf-8")
+    except subprocess.TimeoutExpired:
+        return None, None, None
 
 
 def timestamp():
@@ -44,7 +48,8 @@ def main():
     args = parser.parse_args()
 
     cmd = args.cmd
-
+    cmd = " ".join(cmd)
+    cmd = re.split(r"\s+", cmd)
 
     timeout = args.timeout
     threads = args.threads
@@ -78,12 +83,12 @@ def main():
                     cmd_final.append(arg)
 
                 print("Scheduling:", " ".join(cmd_final))
-                future = pool.submit(execute, timeout, cmd_final)
+                future = pool.schedule(execute, args = (cmd_final, timeout), timeout = timeout)
                 futures.append((future, cmd_final))
         else:
-            print("Scheduling:", cmd_final)
-            future = pool.submit(execute, timeout, cmd_final)
-            futures.append((future, cmd_final))
+            print("Scheduling:", " ".join(cmd))
+            future = pool.schedule(execute, args = (cmd, timeout), timeout = timeout)
+            futures.append((future, cmd))
 
         pool.close()
         pool.join()
@@ -94,10 +99,13 @@ def main():
         sf.write(f"cmd;time;error{linesep}")
 
         for future, cmd in futures:
+            cmd = f'\'{" ".join(cmd)}\''
             print()
             try:
-                cmd = f'\"{" ".join(cmd)}\"'
                 time, out, err = future.result()
+
+                if time is None:
+                    raise TimeoutError
 
                 lfo.write(f"{cmd}{linesep}")
                 lfo.writelines(out)
